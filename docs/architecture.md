@@ -397,6 +397,7 @@ Everything else requires the bearer token:
 | System | `GET system/update/status`, `POST system/update/{check,stage,install}`, `POST system/reboot`, `POST system/services/{name}/restart` |
 | Control | `POST entrypoints/{id}/unlock`, `POST audio/{mute,unmute}`, `POST voicemail/{enable,disable,refresh}` |
 | Calls | `POST call/answer`, `POST call/hangup` (registered only with inbound SIP) |
+| Display | `GET gui/ringer?muted=0\|1`: loopback only, long poll for the display's GUI hook ([gui-ringer-hook.md](gui-ringer-hook.md)) |
 | Streams | `GET ws` (state + events), `GET webrtc/ws` (`offer` with optional `trickle`, which answers before the source starts and sends local candidates as `candidate` messages and a late startup failure as `source_failed`; `candidate`; `close` with optional `leave`) |
 | Media files | `GET entrypoints/{id}/snapshot/{latest,ring}.jpg`, `GET entrypoints/{id}/clip/ring.mp4` |
 

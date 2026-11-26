@@ -44,6 +44,7 @@ type Server struct {
 	runtime       RuntimeControl
 	update        UpdateControl
 	call          CallControl
+	guiRinger     GUIRingerControl
 	diagnostics   interface {
 		Snapshot() diagnostics.Snapshot
 		Refresh(context.Context)
@@ -77,6 +78,7 @@ func (s *Server) SetRingClips(v RingClipControl)      { s.ringClips = v }
 func (s *Server) SetRuntime(v RuntimeControl)         { s.runtime = v }
 func (s *Server) SetUpdate(v UpdateControl)           { s.update = v }
 func (s *Server) SetCall(v CallControl)               { s.call = v }
+func (s *Server) SetGUIRinger(v GUIRingerControl)     { s.guiRinger = v }
 func (s *Server) SetDiagnostics(v interface {
 	Snapshot() diagnostics.Snapshot
 	Refresh(context.Context)
@@ -94,6 +96,9 @@ func (s *Server) Handler() http.Handler {
 	// Registered for POST only: every other method falls through to the
 	// catch-all notFound, so the route is not discoverable from the network.
 	mux.HandleFunc("POST /api/v3/pair/local", s.pairLocal)
+	// The intercom display's own request, from loopback only and for GET only,
+	// like pair/local.
+	mux.HandleFunc("GET /api/v3/gui/ringer", s.guiRingerNext)
 	s.handleProtected(mux, "POST", "/api/v3/auth/rotate", s.rotateBearer)
 	s.handleProtected(mux, "POST", "/api/v3/auth/revoke", s.revokeBearer)
 	s.handle(mux, "POST", "/api/v3/auth/recover", s.recoverBearer)
@@ -446,6 +451,29 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, target any) bool {
 	}
 
 	return true
+}
+
+// guiRingerNext answers the display's GUI hook: ?muted=1 or 0 is what the
+// display shows, and the answer {"muted": bool} what it should show. It waits
+// up to a long poll when they agree.
+func (s *Server) guiRingerNext(w http.ResponseWriter, r *http.Request) {
+	if s.guiRinger == nil || !fromLoopback(r) {
+		s.notFound(w, r)
+		return
+	}
+
+	var shown bool
+
+	switch r.URL.Query().Get("muted") {
+	case "1":
+		shown = true
+	case "0":
+	default:
+		writeError(w, http.StatusBadRequest, "invalid_request", "muted must be 0 or 1")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]bool{"muted": s.guiRinger.Next(r.Context(), shown)})
 }
 
 func sourceIP(r *http.Request) string {

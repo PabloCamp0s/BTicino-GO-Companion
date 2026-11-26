@@ -1,6 +1,9 @@
 // Package ringersync keeps the intercom's display in step with a ringer
 // unmuted by the companion.
 //
+// When the GUI hook of internal/guiringer is installed, the display follows
+// the unmute itself and says so, and no reload runs.
+//
 // The display's GUI follows a mute it sees on the bus but ignores an unmute
 // (seen on a C100X on 2026-11-05; c300x-controller works around the same on
 // the C300X): after an unmute from Home Assistant or HomeKit the display goes
@@ -31,6 +34,11 @@ type Config struct {
 	Busy func() bool
 	// Reload restarts the firmware so the GUI reads the ringer state again.
 	Reload func(context.Context) error
+	// DisplayShows reports whether the display has said, at since or later,
+	// that it shows the ringer muted or not, through the GUI hook of
+	// internal/guiringer. A display that shows the unmute needs no reload. Nil
+	// means there is no such hook.
+	DisplayShows func(muted bool, since time.Time) bool
 	// Delay is how long the commands must settle before a reload.
 	Delay time.Duration
 	// Poll is how often Busy is asked while the reload waits.
@@ -47,6 +55,8 @@ type Sync struct {
 	mu      sync.Mutex
 	pending bool
 	due     time.Time
+	// unmutedAt is when the pending unmute was asked.
+	unmutedAt time.Time
 }
 
 func New(cfg Config) *Sync {
@@ -71,6 +81,7 @@ func (s *Sync) Mute(ctx context.Context) error {
 
 func (s *Sync) Unmute(ctx context.Context) error {
 	wasMuted := s.cfg.Muted == nil || s.cfg.Muted()
+	asked := time.Now()
 
 	if err := s.cfg.Audio.Unmute(ctx); err != nil {
 		return err
@@ -83,6 +94,7 @@ func (s *Sync) Unmute(ctx context.Context) error {
 	s.mu.Lock()
 	s.pending = true
 	s.due = time.Now().Add(s.cfg.Delay)
+	s.unmutedAt = asked
 	s.mu.Unlock()
 
 	select {
@@ -125,7 +137,7 @@ func (s *Sync) waitUntilDue(ctx context.Context) bool {
 		}
 
 		s.mu.Lock()
-		pending, due := s.pending, s.due
+		pending, due, unmutedAt := s.pending, s.due, s.unmutedAt
 		s.mu.Unlock()
 
 		if !pending {
@@ -134,6 +146,16 @@ func (s *Sync) waitUntilDue(ctx context.Context) bool {
 
 		if time.Now().Before(due) {
 			continue
+		}
+
+		if s.cfg.DisplayShows != nil && s.cfg.DisplayShows(false, unmutedAt) {
+			s.mu.Lock()
+			s.pending = false
+			s.mu.Unlock()
+
+			s.cfg.Logger.Info("the display shows the ringer unmuted; no firmware reload")
+
+			return true
 		}
 
 		if s.cfg.Busy != nil && s.cfg.Busy() {

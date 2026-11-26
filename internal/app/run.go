@@ -7,6 +7,7 @@ import (
 	"bticino-go-companion/internal/core"
 	"bticino-go-companion/internal/diagnostics"
 	"bticino-go-companion/internal/discovery"
+	"bticino-go-companion/internal/guiringer"
 	"bticino-go-companion/internal/homekit"
 	"bticino-go-companion/internal/media"
 	"bticino-go-companion/internal/openwebnet"
@@ -121,7 +122,11 @@ func run(
 
 	go checkUpdates(ctx, updater, server.BroadcastState, logger)
 
-	applyEvent := newEventApplier(projector, homeKit, server, logger)
+	publish := newEventApplier(projector, homeKit, server, logger)
+	applyEvent := func(event core.Event) {
+		publish(event)
+		runtime.guiRinger.Observe(event)
+	}
 
 	// The sink first, the inbound handler second, and never the other way
 	// round. Manager.SetEvents drops what is published while the sink is still
@@ -303,6 +308,7 @@ type applicationRuntime struct {
 	mdns              *discovery.Service
 	homeKit           *homekit.Manager
 	server            *api.Server
+	guiRinger         *guiringer.Hook
 	ringClips         *media.RingClipRecorder
 	ringWatch         *ringVideoWatch
 	diagnosticService *diagnostics.Service
@@ -497,15 +503,18 @@ func newRuntime(ctx context.Context, configStore *config.Store, logger *slog.Log
 
 	// The display ignores an unmute it sees on the bus, so an unmute from Home
 	// Assistant or HomeKit is followed by a firmware reload once the intercom is
-	// idle. See internal/ringersync.
+	// idle. See internal/ringersync. A display with the GUI hook follows the
+	// unmute itself, and then no reload runs; see internal/guiringer.
+	guiRinger := guiringer.New(func() bool { return projector.Snapshot().Audio.Muted })
 	ringer := ringersync.New(ringersync.Config{
-		Audio:  control,
-		Muted:  func() bool { return projector.Snapshot().Audio.Muted },
-		Busy:   func() bool { return intercomBusy(projector.Snapshot()) },
-		Reload: ringersync.NewFirmwareReloader().Reload,
-		Delay:  ringerReloadDelay,
-		Poll:   ringerReloadPoll,
-		Logger: logger.With("component", "ringersync"),
+		Audio:        control,
+		Muted:        func() bool { return projector.Snapshot().Audio.Muted },
+		Busy:         func() bool { return intercomBusy(projector.Snapshot()) },
+		Reload:       ringersync.NewFirmwareReloader().Reload,
+		DisplayShows: guiRinger.Shows,
+		Delay:        ringerReloadDelay,
+		Poll:         ringerReloadPoll,
+		Logger:       logger.With("component", "ringersync"),
 	})
 	go ringer.Run(ctx)
 
@@ -516,6 +525,7 @@ func newRuntime(ctx context.Context, configStore *config.Store, logger *slog.Log
 	server := api.NewServer(authStore, configStore, projector, logger)
 	server.SetEntrypoints(control)
 	server.SetAudio(ringer)
+	server.SetGUIRinger(guiRinger)
 	server.SetVoicemail(control)
 	server.SetWebRTC(webrtc)
 	server.SetSnapshot(snapshots)
@@ -547,6 +557,7 @@ func newRuntime(ctx context.Context, configStore *config.Store, logger *slog.Log
 		mdns:              discovery.NewService(nil),
 		homeKit:           homeKit,
 		server:            server,
+		guiRinger:         guiRinger,
 		diagnosticService: diagnosticService,
 		runtime:           rt,
 		dialer:            dialer,

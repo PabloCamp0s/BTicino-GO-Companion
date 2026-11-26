@@ -62,3 +62,11 @@ type CallControl interface {
 	Answer(ctx context.Context) error
 	Hangup(ctx context.Context) error
 }
+
+// GUIRingerControl answers the intercom display's own requests for the ringer
+// mute; see internal/guiringer.
+type GUIRingerControl interface {
+	// Next takes what the display shows and returns what it should show, at
+	// once or after a long poll.
+	Next(ctx context.Context, shown bool) bool
+}
