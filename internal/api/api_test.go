@@ -1450,3 +1450,52 @@ func TestServer_StateCarriesRingClipTime(t *testing.T) {
 		t.Fatalf("ring_clip_recorded_at = %#v, want 2026-10-26T09:30:00.123Z", got)
 	}
 }
+
+type fakeGUIRinger struct {
+	shown []bool
+	muted bool
+}
+
+func (f *fakeGUIRinger) Next(_ context.Context, shown bool) bool {
+	f.shown = append(f.shown, shown)
+	return f.muted
+}
+
+func TestServer_GUIRinger(t *testing.T) {
+	t.Parallel()
+
+	get := func(server *Server, remoteAddr, query string) *httptest.ResponseRecorder {
+		request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/v3/gui/ringer"+query, nil)
+		request.RemoteAddr = remoteAddr
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, request)
+
+		return response
+	}
+
+	server, _ := newTestServer(t)
+
+	if response := get(server, "127.0.0.1:5555", "?muted=1"); response.Code != http.StatusNotFound {
+		t.Fatalf("without a hook = %d, want 404", response.Code)
+	}
+
+	ringer := &fakeGUIRinger{muted: false}
+	server.SetGUIRinger(ringer)
+
+	if response := get(server, "192.0.2.1:1234", "?muted=1"); response.Code != http.StatusNotFound {
+		t.Fatalf("from the network = %d, want 404", response.Code)
+	}
+
+	if response := get(server, "127.0.0.1:5555", "?muted=yes"); response.Code != http.StatusBadRequest {
+		t.Fatalf("invalid muted = %d, want 400", response.Code)
+	}
+
+	response := get(server, "127.0.0.1:5555", "?muted=1")
+	if response.Code != http.StatusOK || strings.TrimSpace(response.Body.String()) != `{"muted":false}` {
+		t.Fatalf("display request = %d %s, want 200 {\"muted\":false}", response.Code, response.Body.String())
+	}
+
+	if len(ringer.shown) != 1 || !ringer.shown[0] {
+		t.Fatalf("shown = %v, want the display's muted", ringer.shown)
+	}
+}

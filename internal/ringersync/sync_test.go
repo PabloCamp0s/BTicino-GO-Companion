@@ -49,6 +49,12 @@ type harness struct {
 func newHarness(t *testing.T, muted bool) *harness {
 	t.Helper()
 
+	return newHarnessWithDisplay(t, muted, nil)
+}
+
+func newHarnessWithDisplay(t *testing.T, muted bool, display func(bool, time.Time) bool) *harness {
+	t.Helper()
+
 	h := &harness{audio: &fakeAudio{muted: muted}, reloads: make(chan struct{}, 8)}
 	h.sync = New(Config{
 		Audio: h.audio,
@@ -58,9 +64,10 @@ func newHarness(t *testing.T, muted bool) *harness {
 			h.reloads <- struct{}{}
 			return nil
 		},
-		Delay:  20 * time.Millisecond,
-		Poll:   5 * time.Millisecond,
-		Logger: slog.New(slog.DiscardHandler),
+		DisplayShows: display,
+		Delay:        20 * time.Millisecond,
+		Poll:         5 * time.Millisecond,
+		Logger:       slog.New(slog.DiscardHandler),
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -179,4 +186,37 @@ func TestFailedUnmuteDoesNotReload(t *testing.T) {
 	}
 
 	h.expectReloads(t, 0)
+}
+
+// With the GUI hook the display follows the unmute itself and says so: no
+// reload.
+func TestUnmuteTheDisplayShowsDoesNotReload(t *testing.T) {
+	var asked atomic.Int32
+
+	h := newHarnessWithDisplay(t, true, func(muted bool, since time.Time) bool {
+		asked.Add(1)
+		return !muted && time.Since(since) < time.Second
+	})
+
+	if err := h.sync.Unmute(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	h.expectReloads(t, 0)
+
+	if asked.Load() == 0 {
+		t.Fatal("the display was never asked")
+	}
+}
+
+// A hook that has not seen the unmute, or a display without the hook, still
+// gets the reload.
+func TestUnmuteTheDisplayDoesNotShowReloads(t *testing.T) {
+	h := newHarnessWithDisplay(t, true, func(bool, time.Time) bool { return false })
+
+	if err := h.sync.Unmute(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	h.expectReloads(t, 1)
 }

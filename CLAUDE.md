@@ -89,7 +89,8 @@ asks for video only, and on answer adds audio via `SourceSession.Answered` witho
 **Ringer sync (`internal/ringersync`).** The display's GUI follows a mute it sees on the bus but ignores
 an unmute, so after an unmute the companion reloads the firmware. That reload stops the whole firmware
 for about 25 s, so it waits until commands have settled and the intercom is idle (no ring, call or
-stream). Treat any change there as able to take down the intercom.
+stream). A display with the QML hook of `internal/guiringer` follows the unmute itself and the reload is
+skipped ([docs/gui-ringer-hook.md](docs/gui-ringer-hook.md)). Treat any change there as able to take down the intercom.
 
 **GStreamer on the device** is 1.12.4: no partial caps filter right after a caps-less `fdsrc`; always
 capture `gst-launch` stderr and exit status in the warning log.

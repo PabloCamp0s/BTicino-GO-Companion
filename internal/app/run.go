@@ -7,6 +7,7 @@ import (
 	"bticino-go-companion/internal/core"
 	"bticino-go-companion/internal/diagnostics"
 	"bticino-go-companion/internal/discovery"
+	"bticino-go-companion/internal/guiringer"
 	"bticino-go-companion/internal/homekit"
 	"bticino-go-companion/internal/media"
 	"bticino-go-companion/internal/openwebnet"
@@ -137,6 +138,7 @@ func run(
 		}
 
 		publisher.apply(event)
+		runtime.guiRinger.Observe(event)
 	}
 	ringAttribution := ringattribution.New(system.CompanionDataDir, ringAttributionSettings(configStore), configuredDoorbells(configStore), logger)
 	webUI.SetRingAttribution(ringAttribution)
@@ -329,6 +331,7 @@ type applicationRuntime struct {
 	mdns              *discovery.Service
 	homeKit           *homekit.Manager
 	server            *api.Server
+	guiRinger         *guiringer.Hook
 	ringClips         *media.RingClipRecorder
 	snapshots         *media.SnapshotManager
 	ringWatch         *ringVideoWatch
@@ -526,7 +529,8 @@ func newRuntime(ctx context.Context, configStore *config.Store, logger *slog.Log
 
 	// The display ignores an unmute it sees on the bus, so an unmute from Home
 	// Assistant or HomeKit is followed by a firmware reload once the intercom is
-	// idle. See internal/ringersync.
+	// idle. See internal/ringersync. A display with the GUI hook follows the
+	// unmute itself, and then no reload runs; see internal/guiringer.
 	// The reload waits for the intercom to go unused for a while, and the
 	// intercom watch tells Home Assistant the intercom is unavailable until
 	// the firmware answers again.
@@ -536,6 +540,7 @@ func newRuntime(ctx context.Context, configStore *config.Store, logger *slog.Log
 		return err
 	}, logger)
 	reloader := ringersync.NewFirmwareReloader()
+	guiRinger := guiringer.New(func() bool { return projector.Snapshot().Audio.Muted })
 	ringer := ringersync.New(ringersync.Config{
 		Audio: control,
 		Muted: func() bool { return projector.Snapshot().Audio.Muted },
@@ -544,9 +549,10 @@ func newRuntime(ctx context.Context, configStore *config.Store, logger *slog.Log
 			intercom.reloading()
 			return reloader.Reload(ctx)
 		},
-		Delay:  ringerReloadDelay,
-		Poll:   ringerReloadPoll,
-		Logger: logger.With("component", "ringersync"),
+		DisplayShows: guiRinger.Shows,
+		Delay:        ringerReloadDelay,
+		Poll:         ringerReloadPoll,
+		Logger:       logger.With("component", "ringersync"),
 	})
 	go ringer.Run(ctx)
 
@@ -557,6 +563,7 @@ func newRuntime(ctx context.Context, configStore *config.Store, logger *slog.Log
 	server := api.NewServer(authStore, configStore, projector, logger)
 	server.SetEntrypoints(watchedEntrypoints{unlock: control.Unlock, watch: intercom, touched: activity.touch})
 	server.SetAudio(ringer)
+	server.SetGUIRinger(guiRinger)
 	server.SetVoicemail(control)
 	server.SetWebRTC(webrtc)
 	server.SetSnapshot(snapshots)
@@ -591,6 +598,7 @@ func newRuntime(ctx context.Context, configStore *config.Store, logger *slog.Log
 		mdns:              discovery.NewService(nil),
 		homeKit:           homeKit,
 		server:            server,
+		guiRinger:         guiRinger,
 		diagnosticService: diagnosticService,
 		runtime:           rt,
 		dialer:            dialer,
